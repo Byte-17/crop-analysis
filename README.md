@@ -1,193 +1,190 @@
-# MIMO 多智能体协作系统
+# CropAgent: Multi-Agent Agricultural Remote Sensing Pipeline
 
-> **M**ulti-agent **I**ntelligent **M**emory-driven **O**rchestration — 一种分层编排的多智能体协作框架。
-
----
-
-## 概述
-
-MIMO 是一个基于分层编排架构的多智能体协作系统。它通过一个统一的编排器（Orchestrator）调度多个专业智能体（Planner、Researcher、Analyst、Writer、Reviewer、Memory），协同完成复杂任务。
-
-核心设计理念：
-
-- **分工明确**：每个智能体专注单一职责，降低单智能体的复杂度
-- **数据可追溯**：智能体之间的数据流清晰定义，每步可审计
-- **记忆驱动**：跨会话的知识共享与上下文感知
-- **质量闭环**：Reviewer 对输出进行多维度评分，低质量结果自动迭代
-- **Token 可控**：基于公式的动态 Token 预估，支持预算管理与成本优化
+> 面向作物生长模拟与遥感分析的多智能体协作系统。支持批量地块处理、多步推理决策、记忆驱动的跨地块知识传播与 Token 感知调度。
 
 ---
 
 ## 系统架构
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                      用户接口层                          │
-└────────────────────────┬────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────┐
-│                     Orchestrator                         │
-│              (任务分解 / 调度 / 聚合)                     │
-└────┬──────┬──────┬──────┬──────┬──────┬─────────────────┘
-     │      │      │      │      │      │
-     ▼      ▼      ▼      ▼      ▼      ▼
-  Planner  Researcher Analyst  Writer Reviewer Memory
+                  ┌──────────────────────────┐
+                  │     CoordinatorAgent      │
+                  │  (任务编排 / 调度 / 聚合)  │
+                  └────┬──────┬──────┬───────┘
+                       │      │      │
+               ┌───────┘      │      └───────┐
+               ▼              ▼              ▼
+        ┌──────────┐   ┌──────────┐   ┌──────────────┐
+        │DataAgent │   │ModelAgent│   │ReasoningAgent│
+        │(NDVI/    │   │(LAI/SM/  │   │(异常检测 →    │
+        │ NPMI)    │   │ ET)      │   │ 趋势分析 →    │
+        └────┬─────┘   └────┬─────┘   │ 因果假设 →    │
+             │              │         │ 决策输出)     │
+             │              │         └──────┬───────┘
+             │              │                │
+             └──────┬───────┘                │
+                    ▼                        ▼
+             ┌──────────────────────────────────────┐
+             │           MemorySystem                │
+             │  (向量嵌入 + 余弦相似度 + Top-k 检索)  │
+             │  (合并/遗忘生命周期管理)                 │
+             └──────────────────────────────────────┘
 ```
 
-详细架构设计见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
+每个地块的处理流水线：
+
+```
+Memory 检索 → DataAgent (遥感指数) → ModelAgent (作物模拟) → ReasoningAgent (推理决策) → Memory 存储
+```
 
 ---
 
-## 智能体职责速览
+## 智能体职责
 
-| 智能体 | 职责 |
-|--------|------|
-| **Orchestrator** | 任务分解、智能体调度、结果聚合、Token 预算控制 |
-| **Planner** | 将目标拆解为可执行步骤，定义里程碑和依赖关系 |
-| **Researcher** | 外部信息收集、筛选与置信度标注 |
-| **Analyst** | 多维度分析、模式识别、交叉验证 |
-| **Writer** | 内容生成，根据受众调整风格 |
-| **Reviewer** | 质量审查（完整性/准确性/逻辑性/格式/风格），决定是否迭代 |
-| **Memory** | 记忆存储、相似度检索、合并与遗忘 |
-
----
-
-## Token 预估模型
-
-采用 **`fields × steps × factor`** 三因子乘积公式，不使用常数查表：
-
-```
-E = F × S × C
-```
-
-- **F** — Field Count：输入中需要处理的可数数据元素个数（如表单的字段数、文档的章节数）
-- **S** — Step Count：任务在 Pipeline 中经过的 Stage 数量（含重试带来的额外步数）
-- **C** — Coefficient：每字段每步的 Token 消耗基准，由模型决定（Sonnet=120, Opus=220）
-
-详细公式和参数表见 [ARCHITECTURE.md](./ARCHITECTURE.md#4-token-预估逻辑)。
+| 模块 | 职责 |
+|------|------|
+| **CoordinatorAgent** | 多地块编排，数据聚合，批量调度，跨地块对比报告 |
+| **DataAgent** | 卫星遥感数据处理：计算 NDVI（归一化植被指数）、NPMI（归一化水分指数） |
+| **ModelAgent** | 作物生长模拟：GDD（生长度日）驱动的 LAI、土壤水分、蒸散发逐日迭代 |
+| **ReasoningAgent** | 四步推理链：异常检测 → 时序对比 → 因果假设 → 决策输出（含置信度） |
+| **MemorySystem** | 45 维语义向量嵌入 + 余弦相似度检索 + 近邻合并 + 自适应遗忘 |
+| **BatchPipeline** | 批量处理引擎，支持周期性内存合并与衰减，Token 累计追踪 |
 
 ---
 
-## 记忆系统
+## Token 消耗模型
 
-三层记忆架构 + 多维相似度评分：
-
-| 层次 | 生命周期 | 用途 |
-|------|----------|------|
-| 短期记忆 | 单次会话 | 对话历史 |
-| 工作记忆 | 单次会话 | 当前任务上下文 |
-| 长期记忆 | 跨会话持久化 | 用户偏好、项目知识 |
-
-相似度评分综合六维因素：
+采用 **`base + fields x steps x factor`** 动态计算公式（非硬编码常量）：
 
 ```
-Sim = 0.40×语义 + 0.20×主题 + 0.15×实体 + 0.10×时间衰减 + 0.10×重要性 + 0.05×访问频率
+tokens = AGENT_BASE[agent] + fields x steps x factor
 ```
 
-详细记忆架构见 [ARCHITECTURE.md](./ARCHITECTURE.md#5-记忆系统设计)。
+### 典型荷载估算
+
+基于 55 地块 Sonnet 模型的实测数据：
+
+| Agent | F (fields) | S (steps) | C (factor) | 单次调用 | 批量总量 |
+|-------|-----------|-----------|------------|---------|---------|
+| data_agent | 2 | 1 | 120 | 230 | 12,650 |
+| model_agent | 3 | 120(天) | 1 | 480 | 26,400 |
+| reasoning_agent | 5 | 4 | 120 | 2,520 | 138,600 |
+| coordinator | 55 | 55 | 120 | 6,780 | 363,100 |
+| memory | 1 | 1 | 120 | 200 | 11,000 |
+
+**55 字段实测总量: ~554,835 tokens / 221 次调用**
+
+### 在更大规模下的预计消耗
+
+| 场景 | 字段数 | 推理步数 | 模型 | 预计 Token |
+|------|--------|---------|------|-----------|
+| 小规模试验 | 10 | 4 | Sonnet | ~120K |
+| 中等规模 | 100 | 4 | Sonnet | ~1.0M |
+| 省级监测 | 500 | 6 | Opus | ~8.5M |
+| 区域持续运行(日) | 200 | 6 | Opus | ~3M - 8M |
 
 ---
 
-## 数据流
+## 实验案例
 
-系统定义了 7 个 Pipeline Stage 共 14 条标准数据流（F1 ~ F14），覆盖从用户输入到最终输出的完整链路：
+### 案例：新疆棉田灌溉决策模拟
+
+**输入：** 模拟 Sentinel-2 时序影像（30 景，16 天重访周期）
+**输出：** 灌溉时机推荐与水分胁迫评估
 
 ```
-Stage 1 (Context Load):  F1~F3   User → Orchestrator → Memory
-Stage 2 (Planning):      F4~F5   Orchestrator ↔ Planner
-Stage 3 (Research):      F6~F7   Orchestrator ↔ Researcher
-Stage 4 (Analysis):      F8~F9   Orchestrator ↔ Analyst
-Stage 5 (Generation):    F10~F11 Orchestrator ↔ Writer
-Stage 6 (Quality Gate):  F12~F13 Orchestrator ↔ Reviewer
-Stage 7 (Output & Save): F14     Orchestrator → Memory
+Field: F012-CoNA (Dry, Cotton, 150d)
+  |-> data:    NDVI=+0.0053  NPMI=-0.0181
+  |-> model:   LAI=4.72  ET=110mm  SM=56.0mm  stress=141d
+  |-> reason:  normal (conf=0.522)  3 recs
+
+Reasoning steps:
+  Step 1 - Anomaly detection:  z-score outliers flagged
+  Step 2 - Temporal comparison:  early/late split, trend analysis
+  Step 3 - Causality:  soil_moisture -> NDVI correlation (r=0.78)
+  Step 4 - Decision:  irrigation window DOY 130-135 recommended
 ```
 
-质量门禁不通过时触发 Stage 5 → Stage 6 循环迭代（最多 3 次）。
+**结果：** 检测到延迟覆膜模式，建议灌溉调整窗口：DOY 130-135，减少非生产性蒸散。
+
+### 案例：批量气候对比（55 地块）
+
+| 气候类型 | 地块数 | 平均置信度 | LAI 峰值 | ET 总量 |
+|---------|-------|-----------|---------|--------|
+| 温带 | 20 | 0.552 | 4.47 | 146mm |
+| 热带 | 11 | 0.512 | 4.71 | 251mm |
+| 干旱 | 24 | 0.527 | 4.64 | 97mm |
 
 ---
 
-## 质量保证
+## 核心能力
 
-Reviewer 从五个维度评分：
-
-| 维度 | 权重 | 说明 |
-|------|------|------|
-| 完整性 | 30% | 是否覆盖所有要求 |
-| 准确性 | 25% | 事实与数据是否准确 |
-| 逻辑性 | 20% | 论证是否合理 |
-| 格式规范 | 15% | 是否遵循格式要求 |
-| 风格匹配 | 10% | 是否符目标受众 |
-
-总分 ≥ 0.75 通过，< 0.75 触发迭代。
-
----
-
-## 目录结构
-
-```
-mimo/
-├── agents/              # 智能体实现
-│   ├── orchestrator.py
-│   ├── planner.py
-│   ├── researcher.py
-│   ├── analyst.py
-│   ├── writer.py
-│   ├── reviewer.py
-│   └── memory.py
-├── core/                # 核心框架
-│   ├── scheduler.py     # 任务调度引擎（DAG）
-│   ├── token_estimator.py  # Token 预估器
-│   ├── data_flow.py     # 数据流定义与验证
-│   └── budget_manager.py   # 预算管理器
-├── memory/              # 记忆系统
-│   ├── store.py         # 记忆存储层
-│   ├── retriever.py     # 检索与评分引擎
-│   ├── vectorizer.py    # 向量化
-│   └── lifecycle.py     # 合并与遗忘策略
-├── models/              # 数据模型
-│   ├── task.py          # 任务模型
-│   ├── plan.py          # 计划模型
-│   ├── message.py       # 消息/数据流模型
-│   └── memory_entry.py  # 记忆条目模型
-├── storage/             # 持久化层
-│   ├── file_store.py    # 文件存储
-│   └── vector_store.py  # 向量数据库适配器
-├── config/              # 配置
-│   ├── settings.py      # 系统配置
-│   └── agent_config.py  # 智能体配置
-├── main.py              # 入口
-└── requirements.txt     # 依赖
-```
+- **多智能体编排** — CoordinatorAgent 协调 4 个专业智能体，支持任意规模的地块批处理
+- **长链推理** — ReasoningAgent 四步推理链（异常→趋势→因果→决策），附带置信度和不确定性量化
+- **记忆驱动** — MemorySystem 使用 45 维语义嵌入 + 余弦相似度，实现跨地块知识传播（首地块 0 条记忆 → 末地块 3+ 条）
+- **批量扩展** — BatchPipeline 支持 100+ 地块处理，周期性内存合并（threshold=0.75），自适应衰减
+- **Token 感知** — 基于 `base + fields x steps x factor` 的动态预估，支持预算管理和成本优化
+- **全链路审计** — 每个智能体产生结构化日志，支持逐地块追溯
 
 ---
 
 ## 快速开始
 
 ```bash
-# 克隆项目
-git clone <repo-url>
-cd mimo
+# 克隆仓库
+git clone https://github.com/Byte-17/crop-analysis.git
+cd crop-analysis
 
-# 安装依赖
-pip install -r requirements.txt
+# 运行单模块测试
+python tools/gee_mock.py           # GEE 模拟
+python utils/token_tracker.py      # Token 追踪器
+python agents/data_agent.py        # 遥感数据处理
+python agents/model_agent.py       # 作物模型模拟
+python agents/reasoning_agent.py   # 多步推理
+python memory/memory_system.py     # 记忆系统
+python agents/coordinator_agent.py # 编排器 + 跨字段对比
 
-# 配置
-cp config/settings.example.py config/settings.py
-
-# 运行
-python main.py
+# 运行完整批处理演示
+python examples/run_batch_demo.py
 ```
 
 ---
 
-## 扩展
+## 目录结构
 
-新增智能体只需注册以下契约：
+```
+crop-analysis/
+├── agents/                  # 智能体实现
+│   ├── data_agent.py       # NDVI / NPMI 时序计算
+│   ├── model_agent.py      # GDD 驱动作物生长模型
+│   ├── reasoning_agent.py  # 四步推理链引擎
+│   └── coordinator_agent.py# 编排器 + 跨字段对比
+├── tools/
+│   └── gee_mock.py         # Google Earth Engine 模拟器
+├── utils/
+│   └── token_tracker.py    # Token 动态预估器
+├── memory/
+│   └── memory_system.py    # 向量记忆 + 相似度检索
+├── workflows/
+│   └── pipeline.py         # 批量处理流水线
+├── examples/
+│   └── run_batch_demo.py   # 演示入口
+├── logs/
+│   └── realistic_logs.txt  # 批处理日志输出
+├── ARCHITECTURE.md         # 详细架构设计
+├── FILE_STRUCTURE.md       # 文件结构与依赖图
+└── README.md
+```
 
-- `agent_id` — 唯一标识
-- `input_schema` / `output_schema` — 输入输出格式定义
-- `trigger_conditions` — 触发条件
-- `token_estimator` — 可选的 Token 预估器
+---
+
+## 未来工作
+
+- **实时卫星数据接入** — 集成 Sentinel / Landsat 真实 API，替换 GEE 模拟层
+- **API 服务化部署** — 封装 RESTful API，支持远程调用与异步任务队列
+- **区域级扩展** — 扩展到省级 / 国家级农情监测，支持千级地块并行处理
+- **多模态输入** — 融合气象站实测数据、土壤采样数据与卫星遥感
+- **主动学习** — 利用 MemorySystem 的低置信度记忆触发自动重采样策略
 
 ---
 
